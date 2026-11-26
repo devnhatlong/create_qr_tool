@@ -1,16 +1,17 @@
 /**
- * Google Apps Script: nhận log từ qr-redirect.js và ghi vào Google Sheet.
+ * Google Apps Script: nhận log từ Cloudflare Worker và ghi vào Google Sheet.
  *
- * Cài đặt:
- *   1. Tạo Google Sheet mới trong Google Drive.
- *   2. Tiện ích mở rộng > Apps Script, dán toàn bộ file này vào, lưu.
- *   3. Triển khai > Tùy chọn triển khai mới > Loại: Ứng dụng web
- *        - Thực thi với tư cách: Tôi
- *        - Người có quyền truy cập: Bất kỳ ai
- *   4. Cấp quyền, copy "URL ứng dụng web" (đuôi /exec) dán vào CONFIG.logUrl trong qr-redirect.js.
+ * Chỉ chấp nhận dữ liệu có đúng TOKEN (mã bí mật chỉ Worker biết), nên dù link /exec
+ * bị lộ, người khác cũng không ghi được dữ liệu giả.
+ *
+ * Sau khi sửa file này: Triển khai > Quản lý triển khai > (bút chì) Sửa > Phiên bản: Phiên bản mới > Triển khai.
+ * Link /exec giữ nguyên.
  */
 
-var SHEET_NAME = 'Lượt truy cập';
+// Mã bí mật — phải trùng với biến LOG_TOKEN của Cloudflare Worker. Không chia sẻ công khai.
+var TOKEN = 'AESPU8PQSZji1Uich1gjeA2luCmzzqTe';
+
+var SHEET_NAME = 'Lượt quét';
 
 // Thứ tự cột trong Sheet: [tên khóa trong dữ liệu gửi lên, tiêu đề cột]
 var COLUMNS = [
@@ -22,50 +23,51 @@ var COLUMNS = [
   ['trinh_duyet', 'Trình duyệt / App quét'],
   ['chuyen_toi', 'Chuyển tới'],
   ['ngon_ngu', 'Ngôn ngữ'],
+  ['quoc_gia', 'Quốc gia'],
+  ['tinh_thanh', 'Tỉnh / Thành'],
+  ['thanh_pho', 'Thành phố'],
   ['mui_gio', 'Múi giờ'],
-  ['man_hinh', 'Màn hình'],
-  ['ty_le_diem_anh', 'Tỉ lệ điểm ảnh'],
-  ['mang', 'Mạng'],
-  ['trang_truoc', 'Trang trước'],
+  ['nha_mang', 'Nhà mạng'],
   ['ma_thiet_bi', 'Mã thiết bị (ẩn danh)'],
   ['lan_dau', 'Lần đầu'],
-  ['tham_so', 'Tham số URL'],
   ['user_agent', 'User-Agent']
 ];
 
 function doPost(e) {
+  var data;
+  try {
+    data = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+  } catch (err) {
+    return ContentService.createTextOutput('bad request');
+  }
+  if (data.token !== TOKEN) return ContentService.createTextOutput('forbidden');
+
   var lock = LockService.getScriptLock();
   lock.waitLock(10000); // tránh ghi đè khi nhiều người quét cùng lúc
   try {
-    var data = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     data.thoi_gian = new Date();
-
-    var sheet = getSheet_();
     var row = COLUMNS.map(function (c) {
       var v = data[c[0]];
       if (v === undefined || v === null) return '';
-      // Chặn công thức độc hại (=, +, -, @) khi mở bằng Sheets/Excel
+      // Chặn công thức (=, +, -, @) khi mở bằng Sheets/Excel
       if (typeof v === 'string') v = v.slice(0, 1000).replace(/^([=+\-@])/, "'$1");
       return v;
     });
-    sheet.appendRow(row);
+    getSheet_().appendRow(row);
     return ContentService.createTextOutput('ok');
-  } catch (err) {
-    return ContentService.createTextOutput('error: ' + err);
   } finally {
     lock.releaseLock();
   }
 }
 
-// Mở URL /exec trên trình duyệt để kiểm tra script đang chạy.
+// Mở link /exec trên trình duyệt để kiểm tra script còn chạy (không lộ dữ liệu).
 function doGet() {
-  var sheet = getSheet_();
-  return ContentService.createTextOutput('OK - đã ghi ' + Math.max(sheet.getLastRow() - 1, 0) + ' lượt.');
+  return ContentService.createTextOutput('OK');
 }
 
 function getSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+  var sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME, 0);
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(COLUMNS.map(function (c) { return c[1]; }));
     sheet.getRange(1, 1, 1, COLUMNS.length).setFontWeight('bold').setBackground('#EEF2FF');
